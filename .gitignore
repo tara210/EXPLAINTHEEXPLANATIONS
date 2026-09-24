@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+
+# Regenerate with: python DATASET/prepare_eli5c.py
+DATASET/raw/
+DATASET/processed/
