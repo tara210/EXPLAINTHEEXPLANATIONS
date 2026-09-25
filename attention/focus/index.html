@@ -1,0 +1,403 @@
+<title>Do Explanation Words Draw Attention?</title>
+<meta name="description" content="Focused analysis: attention x gradient by word class in Qwen3-4B, controlled for part of speech, frequency, length and position, with a replication on a second model.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:opsz,wght@6..72,500&display=swap">
+<style>
+  :root {
+    --ground: #f1f3f6; --surface: #ffffff; --ink: #15202b; --muted: #5a6675; --faint: #8a94a1; --rule: #d8dde4;
+    --grid: #e6e9ee; --link: #1f5fd1;
+    --s1: #2a78d6; --s2: #eb6834;
+    --pos: #2a78d6; --neg: #e34948; --mid: #f0efec;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --display: "Newsreader", Georgia, "Times New Roman", serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0e1318; --surface: #151c23; --ink: #e3e8ee; --muted: #93a0ae; --faint: #6b7784; --rule: #27323d;
+      --grid: #1f2831; --link: #6d9bff;
+      --s1: #3987e5; --s2: #d95926;
+      --pos: #3987e5; --neg: #e66767; --mid: #383835;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0e1318; --surface: #151c23; --ink: #e3e8ee; --muted: #93a0ae; --faint: #6b7784; --rule: #27323d;
+    --grid: #1f2831; --link: #6d9bff;
+    --s1: #3987e5; --s2: #d95926;
+    --pos: #3987e5; --neg: #e66767; --mid: #383835;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--ground); color: var(--ink); font: 15px/1.6 var(--sans); padding-inline: 20px; padding-block: 28px 64px; }
+  .wrap { max-width: 980px; margin-inline: auto; display: grid; gap: 34px; }
+  a { color: var(--link); }
+  .eyebrow { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+  h1 { font: 500 clamp(30px, 4.4vw, 44px)/1.1 var(--display); margin: 6px 0 0; text-wrap: balance; letter-spacing: -0.01em; }
+  h2 { font: 600 19px/1.3 var(--sans); margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h3 { font: 600 14.5px/1.3 var(--sans); margin: 0; }
+  p { margin: 0; }
+  .lede { font-size: 17px; color: var(--muted); max-width: 64ch; margin-top: 10px; }
+  .links { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 14px; font-weight: 500; }
+
+  .status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; margin-top: 18px; font-size: 13px; color: var(--muted); }
+  .progress { display: flex; align-items: center; gap: 10px; }
+  .bar { width: 160px; height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--s1); border-radius: 3px; }
+  .status b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .answer { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 20px; display: grid; gap: 8px; }
+  .answer p { font-size: 16.5px; max-width: 70ch; }
+  .answer .fine { font-size: 13px; color: var(--muted); }
+  .up { color: var(--pos); font-weight: 600; } .down { color: var(--neg); font-weight: 600; }
+
+  section { display: grid; gap: 14px; }
+  .sec-head { display: grid; gap: 6px; }
+  .sec-head p { color: var(--muted); max-width: 72ch; font-size: 14.5px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 16px; align-items: start; }
+  .panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; display: grid; gap: 10px; min-width: 0; }
+  .panel > p, .note { font-size: 13px; color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); }
+  .key { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+  .chart svg { width: 100%; max-width: 760px; height: auto; display: block; overflow: visible; }
+  .main-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+  @media (max-width: 800px) { .main-grid { grid-template-columns: 1fr; } }
+  .chart text { font: 11px var(--mono); fill: var(--muted); }
+  .chart .lab { font: 500 12px var(--sans); fill: var(--ink); }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th { font: 600 11px var(--sans); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: bottom; }
+  th:first-child, td:first-child { text-align: left; }
+  td { padding: 6px 8px; text-align: right; font-family: var(--mono); border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  td:first-child { font-family: var(--sans); }
+  td.dim { color: var(--faint); }
+  table.prose td { font-family: var(--sans); white-space: normal; text-align: left; vertical-align: top; font-size: 13.5px; }
+  table.prose td:first-child { font-weight: 600; white-space: nowrap; }
+  table.prose td.ev { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+  table.prose th { text-align: left; }
+  .classes { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  .classes b { color: var(--ink); font-weight: 600; }
+  ul.plain { margin: 0; padding-left: 18px; display: grid; gap: 8px; max-width: 76ch; }
+  ul.plain li::marker { color: var(--faint); }
+  #tip { position: fixed; pointer-events: none; background: var(--ink); color: var(--surface); font: 12px/1.45 var(--mono); padding: 6px 8px; border-radius: 5px; z-index: 10; max-width: 300px; }
+  .missing { color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow" id="eyebrow">Explain the Explanations · focused analysis</div>
+    <h1>Do explanation words draw attention?</h1>
+    <p class="lede">When Qwen3-4B reads an ELI5 explanation, do words like <i>because</i>, <i>but</i> or <i>imagine</i> receive more of the attention that helps it predict the rest, than comparable other words?</p>
+    <div class="links">
+      <a href="https://claude.ai/artifact/1LX7Wc427byVuJextPUf9q">All results →</a>
+      <a href="https://claude.ai/artifact/7ceanMVonCj2AafpNaaVcW">Step through texts →</a>
+    </div>
+    <div class="status" id="status"></div>
+  </header>
+
+  <div class="answer" id="answer"></div>
+
+  <section>
+    <div class="sec-head">
+      <h2>Word classes compared with other words</h2>
+      <p>Filled marks: compared with words of the same part of speech, frequency, length and position in the same text. Hollow marks: compared only within the same text. Lines are 95% confidence intervals, clustered by question.</p>
+    </div>
+    <div class="main-grid">
+      <div class="panel">
+        <div class="legend"><span class="key"><span class="dot" style="background:var(--s1)"></span>controlled</span><span class="key"><span class="dot" style="border:1.5px solid var(--faint)"></span>within text only</span></div>
+        <div class="chart" id="mainChart"></div>
+        <p>1.0× = same as comparable other words. Blue = interval above 1, red = below, grey = includes 1. Hover a row for word counts.</p>
+      </div>
+      <div class="panel">
+        <h3>What is in each class</h3>
+        <div class="classes">
+          <div><b>causal</b> because, so, therefore, thus, since, due to, as a result, leads to …</div>
+          <div><b>contrast</b> but, however, although, though, instead, actually, otherwise …</div>
+          <div><b>illustration</b> like, imagine, think of, for example, for instance, let's say …</div>
+          <div><b>reformulation</b> basically, essentially, in other words, means, called …</div>
+          <div><b>hedge</b> kind of, sort of, probably, might, maybe, usually, roughly …</div>
+          <div><b>condition</b> if, when, unless, whenever, then (after if/when)</div>
+          <div><b>reader</b> you, your, you're, yourself …</div>
+          <div><b>writer</b> I, I'm, my, me …</div>
+        </div>
+        <p class="note">Full lists and matching rules: <code>attention/WORD_CLASSES.md</code> in the repository. Ambiguous words are checked with spaCy: <i>so</i> is not counted in “so big”, <i>since</i> not before a number, <i>like</i> only as a comparison, <i>then</i> only after <i>if/when</i>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>The same picture with another model and another measure</h2>
+      <p>The first 200 explanations, analysed identically: attention × gradient in Qwen3-4B, and plain attention weights in the smaller Qwen3-1.7B. Plain attention shows where a model looks; attention × gradient keeps only the attention that helps it predict the text.</p>
+    </div>
+    <div class="panel">
+      <div class="legend"><span class="key"><span class="dot" style="background:var(--s1)"></span>Qwen3-4B · attention × gradient</span><span class="key"><span class="dot" style="background:var(--s2)"></span>Qwen3-1.7B · plain attention</span></div>
+      <div class="chart" id="repChart"></div>
+      <p>Controlled model, 200 explanations from 51 questions, identical texts for both.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Where in the model</h2>
+      <p>The controlled model fitted separately for each quarter of Qwen3-4B's 36 layers.</p>
+    </div>
+    <div class="panel">
+      <div class="scroll" id="bands"></div>
+      <p id="bandNote"></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>How the comparison is made</h2>
+      <p>Each word gets a score: the attention × gradient relevance it receives from all later tokens, averaged over its sub-word tokens and summed over layers. That score depends on much more than a word's class, so the model compares each class with <i>similar</i> words. Every row below removes one reason two words can differ; the evidence column is measured on the current data.</p>
+    </div>
+    <div class="panel">
+      <div class="scroll" id="controls"></div>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <h3>Position check</h3>
+        <div class="legend"><span class="key"><span class="sw" style="background:var(--s2)"></span>before adjustment</span><span class="key"><span class="sw" style="background:var(--s1)"></span>after adjustment</span></div>
+        <div class="chart" id="posChart"></div>
+        <p>Mean log₂ score per twentieth of the text. Before adjustment early words score much higher, because more later tokens can pass relevance to them. After adjustment the line should be flat at 0: position no longer explains the scores. Stretches with fewer than 50 words (the very end of long texts) are not shown.</p>
+      </div>
+      <div class="panel">
+        <h3>What the word-sense rules change</h3>
+        <div class="scroll" id="dis"></div>
+        <p>Words per class with the plain word lists vs after the spaCy rules, and the controlled effect with each.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>How much the controls matter</h2>
+      <p id="ctrlLead">Two questions: how strongly each control shapes the scores by itself, and how much the class results would change without it.</p>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <h3>What explains the differences between words</h3>
+        <div class="legend"><span class="key"><span class="sw" style="background:var(--s1); height:8px"></span>alone</span><span class="key"><span class="sw" style="background:var(--s2); height:8px"></span>unique (lost when the block is removed)</span></div>
+        <div class="chart" id="varChart"></div>
+        <p id="varNote">Share of the differences between words within a text. Controls that overlap (function words are also frequent words) explain a lot alone but little uniquely.</p>
+      </div>
+      <div class="panel">
+        <h3>Class results without a control</h3>
+        <div class="scroll" id="sens"></div>
+        <p id="sensNote"></p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Limits and next steps</h2></div>
+    <div class="panel">
+      <ul class="plain">
+        <li><b>Attention, not meaning.</b> Attention × gradient shows which attention helps the model predict the explanation; it does not show that the model “understands” a causal relation.</li>
+        <li><b>Eight classes are tested at once</b>, so one interval excluding 1.0 could be chance. Effects that hold across both models and measures (causal, contrast, illustration, hedges) are the ones to trust.</li>
+        <li><b>Word lists are simple.</b> The spaCy rules catch the commonest ambiguities; <i>when</i> (time vs condition) and <i>actually</i> (contrast vs emphasis) remain mixed.</li>
+        <li><b>No baseline of non-explanations yet.</b> The effect may be typical of English prose in general rather than of explaining. Running the same measure on non-explanatory text would tell.</li>
+        <li><b>Next:</b> highest- vs lowest-scored answers in the same model, which words drive each class, and per-head analysis.</li>
+      </ul>
+    </div>
+  </section>
+</div>
+<div id="tip" hidden></div>
+
+<script src="data.js" onerror="void 0"></script>
+<script>
+(() => {
+  const F = window.FOCUS;
+  const $ = (id) => document.getElementById(id);
+  if (!F) { $("answer").innerHTML = '<p class="missing">No results yet.</p>'; return; }
+  const M = F.main;
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent?.appendChild(e); return e; };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const x2 = (v) => v.toFixed(2) + "×";
+  const tip = $("tip");
+  const showTip = (ev, html) => { tip.innerHTML = html; tip.hidden = false; tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + "px"; tip.style.top = (ev.clientY + 14) + "px"; };
+  const hideTip = () => { tip.hidden = true; };
+  const cellBg = (v, max) => {
+    if (v == null || Number.isNaN(v)) return "";
+    const a = Math.min(1, Math.abs(v) / max);
+    return `background: color-mix(in srgb, var(${v >= 0 ? "--pos" : "--neg"}) ${Math.round(a * 55)}%, var(--mid))`;
+  };
+  const table = (target, head, rows, cls = "") => {
+    $(target).innerHTML = `<table class="${cls}"><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.join("")}</tr>`).join("")}</tbody></table>`;
+  };
+  const td = (v, style = "", cls = "") => `<td class="${cls}" style="${style}">${v}</td>`;
+  const sig = (r) => (r.ci_low > 0 ? "up" : r.ci_high < 0 ? "down" : "");
+
+  // ---- header status
+  const done = M.n_texts, target = F.target_texts;
+  $("eyebrow").textContent = `Explain the Explanations · focused analysis · ${F.updated}`;
+  $("status").innerHTML = `
+    <span class="progress"><span class="bar"><i style="width:${Math.min(100, done / target * 100)}%"></i></span><b>${done.toLocaleString("en")}</b> of ${target.toLocaleString("en")} explanations${done < target ? " (run in progress)" : ""}</span>
+    <span><b>${M.n_questions}</b> questions</span>
+    <span><b>${M.n_words.toLocaleString("en")}</b> words analysed</span>
+    <span>Qwen3-4B-Base · attention × gradient</span>`;
+
+  // ---- the answer so far, written from the numbers
+  const full = M.classes.full.filter((r) => r.log2 != null);
+  const up = full.filter((r) => r.ci_low > 0).sort((a, b) => b.x - a.x);
+  const down = full.filter((r) => r.ci_high < 0).sort((a, b) => a.x - b.x);
+  const list = (rs) => rs.map((r) => `<b>${esc(r.cls)}</b> ${x2(r.x)}`).join(", ");
+  const rep4 = F.same200_4b?.classes?.full, rep17 = F.same200_17b?.classes?.full;
+  const agree = rep4 && rep17 ? rep4.filter((r) => {
+    const o = rep17.find((q) => q.cls === r.cls);
+    return o && r.log2 != null && o.log2 != null && Math.sign(r.log2) === Math.sign(o.log2) && (r.ci_low > 0 || r.ci_high < 0) && (o.ci_low > 0 || o.ci_high < 0);
+  }).map((r) => r.cls) : [];
+  $("answer").innerHTML = `
+    <div class="eyebrow">The answer so far</div>
+    <p>${up.length ? `Yes, for some classes: <span class="up">more attention</span> than comparable words goes to ${list(up)}` : "No class clearly receives more attention than comparable words yet"}${down.length ? `; <span class="down">less</span> goes to ${list(down)}` : ""}. The other classes are indistinguishable from comparable words.</p>
+    ${agree.length ? `<p class="fine">Replicated with a second model and measure on the same 200 texts: ${agree.map(esc).join(", ")}.</p>` : ""}
+    <p class="fine">Based on ${done} of ${target} explanations; the numbers are updated as the run continues.</p>`;
+
+  // ---- dot + interval chart; series = [{rows, color, hollow, dy}]
+  function dotChart(target, series, { rowH = 32 } = {}) {
+    const box = $(target); box.innerHTML = "";
+    const classes = series[0].rows.filter((r) => r.log2 != null).map((r) => r.cls);
+    const all = series.flatMap((s) => s.rows.flatMap((r) => [r.ci_low, r.ci_high])).filter((v) => v != null);
+    const lo = Math.min(-0.5, ...all), hi = Math.max(0.5, ...all);
+    const W = 520, L = 104, Rm = 18, T = 8, B = 26, H = T + B + classes.length * rowH;
+    const x = (v) => L + (v - lo) / (hi - lo) * (W - L - Rm);
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, box);
+    [-1, -0.5, 0, 0.5, 1].filter((v) => v >= lo && v <= hi).forEach((v) => {
+      el("line", { x1: x(v), x2: x(v), y1: T, y2: H - B, style: `stroke: var(${v === 0 ? "--faint" : "--grid"})`, "stroke-width": 1 }, svg);
+      el("text", { x: x(v), y: H - 8, "text-anchor": "middle" }, svg).textContent = x2(2 ** v);
+    });
+    classes.forEach((c, k) => {
+      const cy = T + k * rowH + rowH / 2;
+      el("text", { x: L - 10, y: cy + 4, "text-anchor": "end", class: "lab" }, svg).textContent = c;
+      const tipLines = [];
+      series.forEach((s, j) => {
+        const r = s.rows.find((q) => q.cls === c);
+        if (!r || r.log2 == null) return;
+        const y = cy + (j - (series.length - 1) / 2) * 10;
+        const col = s.color ? `var(${s.color})` : `var(${r.ci_low > 0 ? "--pos" : r.ci_high < 0 ? "--neg" : "--faint"})`;
+        el("line", { x1: x(r.ci_low), x2: x(r.ci_high), y1: y, y2: y, style: `stroke: ${s.hollow ? "var(--faint)" : col}`, "stroke-width": s.hollow ? 1.5 : 2.5, "stroke-linecap": "round" }, svg);
+        el("circle", { cx: x(r.log2), cy: y, r: s.hollow ? 3.5 : 4.5, style: s.hollow ? "fill: var(--surface); stroke: var(--faint)" : `fill: ${col}; stroke: var(--surface)`, "stroke-width": s.hollow ? 1.5 : 2 }, svg);
+        tipLines.push(`${esc(s.name)}: ${x2(r.x)} [${x2(r.x_low)}–${x2(r.x_high)}]${r.n_words != null ? ` · ${r.n_words} words` : ""}`);
+      });
+      const hit = el("rect", { x: 0, y: cy - rowH / 2, width: W, height: rowH, fill: "transparent" }, svg);
+      hit.addEventListener("pointermove", (ev) => showTip(ev, `<b>${esc(c)}</b><br>${tipLines.join("<br>")}`));
+      hit.addEventListener("pointerleave", hideTip);
+    });
+  }
+  dotChart("mainChart", [
+    { name: "within text only", rows: M.classes.naive, hollow: true },
+    { name: "controlled", rows: M.classes.full },
+  ]);
+  if (rep4 && rep17) {
+    dotChart("repChart", [
+      { name: "Qwen3-4B · attention × gradient", rows: rep4, color: "--s1" },
+      { name: "Qwen3-1.7B · plain attention", rows: rep17, color: "--s2" },
+    ]);
+  } else $("repChart").innerHTML = '<p class="missing">Available once 200 explanations are done.</p>';
+
+  // ---- layers
+  const bandKeys = Object.keys(M.bands[0]).filter((k) => k !== "cls");
+  const bandLabel = (b) => { const m = b.match(/L?(\d+)-L?(\d+)/); return m ? `Layers ${+m[1]}–${+m[2]}` : b; };
+  table("bands", ["Class", ...bandKeys.map(bandLabel)], M.bands.map((r) =>
+    [`<td>${esc(r.cls)}</td>`, ...bandKeys.map((b) => td(r[b] == null ? "–" : x2(r[b]), r[b] == null ? "" : cellBg(Math.log2(r[b]), 0.5)))]));
+  const peak = (cls) => { const r = M.bands.find((q) => q.cls === cls); if (!r) return null; return bandKeys.reduce((a, b) => (r[b] > r[a] ? b : a)); };
+  const pk = up.length ? peak(up[0].cls) : null;
+  $("bandNote").textContent = `Blue = more than comparable words, red = less.${pk ? ` The strongest class (${up[0].cls}) peaks in ${bandLabel(pk).toLowerCase()}.` : ""}`;
+
+  // ---- controls, with evidence from the current fit
+  const C = M.controls;
+  const cx = (k) => (C[k] ? x2(C[k].x) : "–");
+  const MIN_BIN = 50; // position bins with fewer words are too noisy to show
+  const posRange = (() => { const v = M.position.filter((r) => r.n_words >= MIN_BIN).map((r) => r.within_text); return 2 ** (Math.max(...v) - Math.min(...v)); })();
+    const resid = Math.max(...M.position.filter((r) => r.n_words >= MIN_BIN).map((r) => Math.abs(r.residual_full_model)));
+  table("controls", ["Control", "Why it is needed", "Evidence (current data)", "How"], [
+    ["Same text", "Texts differ in length, style and overall score level; we want to compare words within a text.", "–", "Each explanation gets its own baseline (text fixed effect)."],
+    ["Position", "Early words are seen by more later tokens and collect more relevance.", `score drifts ${posRange.toFixed(1)}× from start to end; after adjustment ≤ ${(2 ** resid).toFixed(2)}×`, `Position (tenths), number of later tokens (bins) and smooth terms; words seen by fewer than ${M.min_after} later tokens are left out (${M.n_words_left_out.toLocaleString("en")} words).`],
+    ["Part of speech", "Most class words are function words, which receive less than nouns in general.", `determiners ${cx("pos:DET")}, auxiliaries ${cx("pos:AUX")}, verbs ${cx("pos:VERB")} of nouns`, "Each part of speech gets its own baseline (spaCy)."],
+    ["Word frequency", "Frequent words receive less, even within one part of speech.", `${cx("log_freq")} per 10× more frequent`, "Log frequency across all 261k ELI5 answers."],
+    ["Word length", "Long words are split into pieces; averaging the pieces lowers the score.", `${cx("n_subtokens")} per extra piece`, "Number of sub-word tokens."],
+    ["Sentence start", "Connectives often open a sentence (“So, …”, “But …”), a position that draws attention anyway.", `${cx("sent_start")} for sentence-initial words`, "Yes/no variable."],
+    ["Same question", "Explanations of one question share topic and vocabulary; their words are not independent.", "–", "Confidence intervals clustered by question."],
+  ].map((r) => [`<td>${r[0]}</td>`, `<td>${r[1]}</td>`, `<td class="ev">${r[2]}</td>`, `<td>${r[3]}</td>`]), "prose");
+
+  // ---- position check
+  (function posChart() {
+    const box = $("posChart"); box.innerHTML = "";
+    const P = M.position.filter((r) => r.n_words >= MIN_BIN), n = P.length;
+    const series = [["--s2", P.map((r) => r.within_text), "before"], ["--s1", P.map((r) => r.residual_full_model), "after"]];
+    const vals = series.flatMap((s) => s[1]);
+    const lo = Math.min(-1, Math.floor(Math.min(...vals))), hi = Math.max(1, Math.ceil(Math.max(...vals)));
+    const W = 520, H = 220, L = 34, Rm = 10, T = 10, B = 26;
+    const x = (i) => L + (i / (n - 1)) * (W - L - Rm), y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, box);
+    for (let v = lo; v <= hi; v++) {
+      el("line", { x1: L, x2: W - Rm, y1: y(v), y2: y(v), style: `stroke: var(${v === 0 ? "--faint" : "--grid"})`, "stroke-width": 1 }, svg);
+      el("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, svg).textContent = (v > 0 ? "+" : "") + v;
+    }
+    el("text", { x: L, y: H - 6 }, svg).textContent = "start of text";
+    el("text", { x: W - Rm, y: H - 6, "text-anchor": "end" }, svg).textContent = "end";
+    series.forEach(([c, v]) => el("path", { d: v.map((q, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(q).toFixed(1)}`).join(""), fill: "none", style: `stroke: var(${c})`, "stroke-width": 2 }, svg));
+    const hit = el("rect", { x: L, y: T, width: W - L - Rm, height: H - T - B, fill: "transparent" }, svg);
+    hit.addEventListener("pointermove", (ev) => {
+      const r = svg.getBoundingClientRect();
+      const i = Math.max(0, Math.min(n - 1, Math.round(((ev.clientX - r.left) * (W / r.width) - L) / (W - L - Rm) * (n - 1))));
+      showTip(ev, `<b>${P[i].pos_20 * 5}–${P[i].pos_20 * 5 + 5}% of the text</b><br>before: ${series[0][1][i].toFixed(3)}<br>after: ${series[1][1][i].toFixed(3)}<br>${P[i].n_words} words`);
+    });
+    hit.addEventListener("pointerleave", hideTip);
+  })();
+
+  // ---- how much the controls matter
+  if (M.variance && M.sensitivity) {
+    (function varChart() {
+      const box = $("varChart"); box.innerHTML = "";
+      const rows = M.variance.filter((r) => r.block !== "all together");
+      const total = M.variance.find((r) => r.block === "all together")?.alone;
+      const W = 520, rowH = 30, L = 118, Rm = 70, T = 6, B = 24, H = T + B + rows.length * rowH;
+      const max = Math.max(0.3, ...rows.map((r) => r.alone));
+      const x = (v) => L + v / max * (W - L - Rm);
+      const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" }, box);
+      [0, 0.1, 0.2, 0.3, 0.4].filter((v) => v <= max).forEach((v) => {
+        el("line", { x1: x(v), x2: x(v), y1: T, y2: H - B, style: "stroke: var(--grid)", "stroke-width": 1 }, svg);
+        el("text", { x: x(v), y: H - 6, "text-anchor": "middle" }, svg).textContent = Math.round(v * 100) + "%";
+      });
+      rows.forEach((r, k) => {
+        const cy = T + k * rowH;
+        el("text", { x: L - 10, y: cy + rowH / 2 + 4, "text-anchor": "end", class: "lab" }, svg).textContent = r.block;
+        el("rect", { x: L, y: cy + 5, width: Math.max(1, x(r.alone) - L), height: 9, rx: 2, style: "fill: var(--s1)" }, svg);
+        el("rect", { x: L, y: cy + 16, width: Math.max(1, x(Math.max(r.unique, 0)) - L), height: 9, rx: 2, style: "fill: var(--s2)" }, svg);
+        el("text", { x: x(r.alone) + 6, y: cy + 13 }, svg).textContent = (r.alone * 100).toFixed(1) + "%";
+        el("text", { x: x(Math.max(r.unique, 0)) + 6, y: cy + 24 }, svg).textContent = (r.unique * 100).toFixed(1) + "%";
+      });
+      if (total != null) $("varNote").textContent = `Share of the differences between words within a text; all controls together explain ${(total * 100).toFixed(0)}%. Controls that overlap (function words are also frequent words) explain a lot alone but little uniquely. The word classes themselves explain little because only a few percent of words belong to one.`;
+    })();
+    const S = M.sensitivity, variants = Object.keys(S[0]).filter((k) => k !== "cls");
+    table("sens", ["Class", ...variants.map((v) => v.replace("without ", "without<br>"))], S.map((r) =>
+      [`<td>${esc(r.cls)}</td>`, ...variants.map((v, j) => {
+        const d = j === 0 ? 0 : Math.log2(r[v] / r.full);
+        const style = j === 0 ? "font-weight:600" : Math.abs(d) >= 0.1 ? cellBg(d, 0.4) : "";
+        return td(r[v] == null ? "–" : x2(r[v]), style);
+      })]));
+    // biggest change without part of speech, written out
+    const big = S.map((r) => ({ cls: r.cls, full: r.full, nopos: r["without part of speech"] }))
+      .filter((r) => r.full != null && r.nopos != null)
+      .sort((a, b) => Math.abs(Math.log2(b.nopos / b.full)) - Math.abs(Math.log2(a.nopos / a.full)))[0];
+    const lf = M.log_freq_class_vs_other;
+    $("sensNote").innerHTML = `Coloured cells differ by more than 7% from the full model (blue = higher without the control, red = lower). ` +
+      (big ? `Part of speech matters most: without it, <b>${esc(big.cls)}</b> would come out at ${x2(big.nopos)} instead of ${x2(big.full)}. ` : "") +
+      (lf ? `Frequency shifts results only slightly, although class words are ${(10 ** (lf.class - lf.other)).toFixed(0)}× more frequent than other words on average.` : "");
+    const pos = M.variance.find((r) => r.block === "part of speech"), fq = M.variance.find((r) => r.block === "frequency");
+    const f10 = M.log_freq_p10_p90;
+    if (pos && fq && f10) $("ctrlLead").textContent = `Part of speech explains ${(pos.alone * 100).toFixed(0)}% of the differences between words on its own, frequency ${(fq.alone * 100).toFixed(0)}%. Across the usual range of words (a ${Math.round(10 ** (f10[1] - f10[0])).toLocaleString("en")}-fold difference in frequency) the frequency effect adds up to ${x2(C.log_freq ? C.log_freq.x ** (f10[1] - f10[0]) : NaN)}. The right-hand table shows how the class results would change without these controls.`;
+  }
+
+  // ---- disambiguation
+  table("dis", ["Class", "Words<br>lists", "Words<br>rules", "Effect<br>lists", "Effect<br>rules"], M.disambiguation.map((r) =>
+    [`<td>${esc(r.cls)}</td>`, td(r.n_raw), td(r.n_disambiguated), td(r.x_raw == null ? "–" : x2(r.x_raw), "", "dim"), td(r.x_disambiguated == null ? "–" : x2(r.x_disambiguated))]));
+})();
+</script>
