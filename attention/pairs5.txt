@@ -1,0 +1,18 @@
+# 5 questions, highest- vs lowest-scored answer each (answer_ids from DATASET/eli5c_multi_1k.csv).
+# Picked for: different categories, top score >= 50 and >= 10x the lowest, both answers
+# 60-170 words with similar lengths.
+# Chemistry: vodka instead of water in a coffee machine (53 vs 4)
+dfp77jm
+dfpboqk
+# Culture: why couldn't our ancestors see blue? (128 vs 3)
+doei3zm
+doeq37e
+# Mathematics: why are 100 digits of pi enough for the solar system? (53 vs 3)
+f8fkm6u
+f8fqu1q
+# Other: why do we get the feeling of being watched? (128 vs 6)
+gc2rskb
+gc35e7x
+# Psychology: why do boring things get interesting when procrastinating? (1054 vs 18)
+erstp7d
+ert6h6e

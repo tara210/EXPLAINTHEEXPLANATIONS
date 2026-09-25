@@ -1,0 +1,688 @@
+<title>ELI5 Attention Stepper</title>
+<meta name="description" content="Step token by token through Qwen3 models reading ELI5 explanations: where each token's attention goes, under several attention measures, plus occlusion.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500&display=swap">
+<style>
+  :root {
+    --ground: #f1f3f6;
+    --surface: #ffffff;
+    --ink: #15202b;
+    --muted: #5a6675;
+    --rule: #d8dde4;
+    --heat: #1f5fd1;
+    --neg: #b86a00;
+    --question: #e6ebf2;
+    --sink: #a86b00;
+    --query-bg: #15202b;
+    --query-ink: #ffffff;
+    --focus: #1f5fd1;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --display: "Newsreader", Georgia, "Times New Roman", serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0e1318;
+      --surface: #151c23;
+      --ink: #e3e8ee;
+      --muted: #93a0ae;
+      --rule: #27323d;
+      --heat: #6d9bff;
+      --neg: #e8a23a;
+      --question: #1c2530;
+      --sink: #e0a53a;
+      --query-bg: #e3e8ee;
+      --query-ink: #0e1318;
+      --focus: #6d9bff;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0e1318;
+    --surface: #151c23;
+    --ink: #e3e8ee;
+    --muted: #93a0ae;
+    --rule: #27323d;
+    --heat: #6d9bff;
+    --neg: #e8a23a;
+    --question: #1c2530;
+    --sink: #e0a53a;
+    --query-bg: #e3e8ee;
+    --query-ink: #0e1318;
+    --focus: #6d9bff;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font: 15px/1.5 var(--sans);
+    padding-inline: 20px;
+    padding-block: 24px 40px;
+  }
+  .wrap { max-width: 1180px; margin-inline: auto; display: grid; gap: 18px; }
+
+  header { display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline; justify-content: space-between; }
+  header h1 { font: 600 20px/1.2 var(--sans); margin: 0; letter-spacing: -0.01em; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; max-width: 75ch; }
+  header a { color: var(--heat); font-weight: 500; font-size: 14px; }
+
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: end;
+    padding: 14px 16px; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+  }
+  .field { display: grid; gap: 5px; min-width: 0; }
+  .field > span {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+  }
+  select {
+    font: 14px var(--sans); color: var(--ink); background: var(--ground);
+    border: 1px solid var(--rule); border-radius: 6px; padding: 6px 8px; max-width: 100%;
+  }
+  #example { width: min(440px, 100%); }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    font: 500 13.5px var(--sans); color: var(--muted); background: var(--ground);
+    border: 0; padding: 6px 11px; cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--rule); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+  .seg button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button:focus-visible, select:focus-visible, input:focus-visible, .tok:focus-visible {
+    outline: 2px solid var(--focus); outline-offset: 2px;
+  }
+  .ghost {
+    font: 500 13px var(--sans); color: var(--ink); background: var(--ground); border: 1px solid var(--rule);
+    border-radius: 6px; padding: 6px 10px; cursor: pointer;
+  }
+
+  .question { font: 500 clamp(20px, 2.6vw, 26px)/1.25 var(--display); margin: 0; text-wrap: balance; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; padding: 1px 7px; border-radius: 99px;
+    border: 1px solid var(--rule); background: var(--surface);
+  }
+  .chip.hi { border-color: var(--heat); color: var(--heat); }
+  .chip.lo { border-color: var(--neg); color: var(--neg); }
+
+  .main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
+  @media (max-width: 880px) { .main { grid-template-columns: 1fr; } }
+
+  .reader {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 18px 20px; display: grid; gap: 14px;
+  }
+  .viewnote { font-size: 13px; color: var(--muted); margin: 0; }
+  .text { font: 15px/2.05 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 58vh; overflow-y: auto; }
+  .tok { border-radius: 3px; cursor: pointer; padding-block: 2px; transition: background-color 80ms linear; }
+  .tok.q { box-shadow: inset 0 -2px 0 var(--question); }
+  .tok.future { opacity: 0.32; }
+  .tok.sink { outline: 1.5px dashed var(--sink); outline-offset: -1px; }
+  .tok.cur { background: var(--query-bg) !important; color: var(--query-ink); }
+  @media (prefers-reduced-motion: reduce) { .tok { transition: none; } }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--muted); align-items: center; }
+  .ramp { width: 90px; height: 10px; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--heat)); border: 1px solid var(--rule); }
+  .ramp.div { background: linear-gradient(90deg, var(--neg), transparent 50%, var(--heat)); }
+  .key { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 14px; height: 12px; border-radius: 2px; display: inline-block; }
+
+  .player { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+  .player button {
+    font: 500 13px var(--sans); color: var(--ink); background: var(--ground); border: 1px solid var(--rule);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer; min-width: 38px;
+  }
+  .player input[type="range"] { width: 100%; accent-color: var(--heat); }
+  .pos { font: 12.5px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .timeline { display: grid; gap: 4px; }
+  .timeline canvas { width: 100%; height: 92px; display: block; cursor: crosshair; }
+  .timeline .legend { font-size: 12px; }
+
+  aside { display: grid; gap: 14px; }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; display: grid; gap: 10px; }
+  .card h2 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .curtok { font: 500 22px/1.2 var(--mono); white-space: pre; overflow-x: auto; }
+  .stats { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 13.5px; margin: 0; }
+  .stats dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+  .stats dt { color: var(--muted); }
+  .top { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+  .top li { display: grid; grid-template-columns: minmax(0, 1fr) 58px; gap: 8px; align-items: center; font-size: 13px; }
+  .top li.wide { grid-template-columns: minmax(0, 1fr) 58px 30px; }
+  .top .lab { font-family: var(--mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; position: relative; padding: 1px 5px; border-radius: 3px; }
+  .top .bar { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--heat) 22%, transparent); border-radius: 3px; z-index: 0; }
+  .top .lab span { position: relative; z-index: 1; }
+  .top .val, .top .n { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; color: var(--muted); }
+  .top .n { font-size: 11.5px; }
+  .note { font-size: 12.5px; color: var(--muted); margin: 0; }
+  .note b { color: var(--ink); font-weight: 600; }
+  .mini { font-size: 12px; }
+  .mini.seg button { padding: 3px 8px; font-size: 12px; }
+  .missing { padding: 24px; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>ELI5 Attention Stepper</h1>
+      <p>Step through an explanation token by token and see where the model's attention goes. <span id="modelName" style="font-family: var(--mono); font-size: 12.5px"></span></p>
+    </div>
+    <div style="display:grid; gap:4px; justify-items:end">
+      <a href="https://claude.ai/artifact/2qTrDyV5nX4e33PYKMo36W">Focused analysis →</a>
+      <a id="resultsLink" href="#" hidden>Results overview →</a>
+    </div>
+  </header>
+
+  <div class="controls">
+    <label class="field"><span>Dataset</span><select id="dataset"></select></label>
+    <label class="field"><span>Explanation</span><select id="example"></select></label>
+    <div class="field"><span>Model reads</span>
+      <div class="seg" id="condition">
+        <button type="button" data-v="qa" aria-pressed="true">Question + answer</button>
+        <button type="button" data-v="answer" aria-pressed="false">Answer only</button>
+      </div>
+    </div>
+    <label class="field"><span>Measure / layers</span><select id="band"></select></label>
+    <div class="field"><span>First token (sink)</span>
+      <div class="seg" id="sinkmode">
+        <button type="button" data-v="out" aria-pressed="true">Left out</button>
+        <button type="button" data-v="in" aria-pressed="false">Included</button>
+      </div>
+    </div>
+    <div class="field"><span>Shade tokens by</span>
+      <div class="seg" id="mode">
+        <button type="button" data-v="row" aria-pressed="true">Where this token looks</button>
+        <button type="button" data-v="recv" aria-pressed="false">Received so far</button>
+        <button type="button" data-v="occ" aria-pressed="false">Occlusion effect</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app">
+    <div>
+      <h2 class="question" id="qtitle"></h2>
+      <div class="meta" id="qmeta"></div>
+    </div>
+
+    <div class="main" style="margin-top:14px">
+      <section class="reader" aria-label="Text">
+        <p class="viewnote" id="viewnote"></p>
+        <div class="legend" id="legend"></div>
+        <div class="text" id="text"></div>
+        <div class="player">
+          <button type="button" id="prev" title="Previous token (←)">◀</button>
+          <button type="button" id="play" title="Play / pause (space)">Play</button>
+          <button type="button" id="next" title="Next token (→)">▶</button>
+          <input type="range" id="slider" min="1" value="1" aria-label="Token position">
+          <span class="pos" id="pos"></span>
+        </div>
+        <div class="timeline" id="timeline">
+          <canvas id="chart" aria-label="Share of attention on the question per token position"></canvas>
+          <div class="legend">
+            <span class="key"><span class="swatch" style="background:var(--heat)"></span>share of each token's attention that goes to the question</span>
+            <span>click to jump</span>
+          </div>
+        </div>
+      </section>
+
+      <aside>
+        <div class="card">
+          <h2>Current token</h2>
+          <div class="curtok" id="curtok"></div>
+          <dl class="stats" id="stats"></dl>
+        </div>
+        <div class="card">
+          <h2>Looks most at</h2>
+          <ol class="top" id="top"></ol>
+          <p class="note" id="topnote"></p>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2 id="wordsTitle">Most looked-at words</h2>
+            <div class="seg mini" id="scope">
+              <button type="button" data-v="text" aria-pressed="true">This text</button>
+              <button type="button" data-v="all" aria-pressed="false">All texts</button>
+            </div>
+          </div>
+          <ol class="top" id="words"></ol>
+          <p class="note" id="wordsnote"></p>
+        </div>
+        <div class="card">
+          <h2>How to read this</h2>
+          <p class="note"><b>Where this token looks:</b> the dark token is being read; earlier tokens are shaded by how much attention it pays them (darkest = its strongest target). Later tokens are faded, since the model cannot see them yet.</p>
+          <p class="note"><b>Received so far:</b> for every token, the attention it has received from all tokens read up to now, relative to an even spread: blue = more, amber = less. Step forward and watch it build up.</p>
+          <p class="note"><b>Occlusion effect:</b> how many bits harder the next 20 tokens get to predict when the word is removed (blue = the word helps, amber = removing it helps). Measured with the question present. About two thirds of it falls on the very next token, i.e. the model reacting to the gap itself; hover a word for the split.</p>
+          <p class="note">The first token soaks up much of the attention regardless of content (dashed outline). <b>Left out</b> rescales the rest to 100%; <b>Included</b> shows it.</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script src="data.js" onerror="void 0"></script>
+<script src="data_pairs5.js" onerror="void 0"></script>
+<script>
+(() => {
+  // Set once the results page is published.
+  const RESULTS_URL = "https://claude.ai/artifact/1LX7Wc427byVuJextPUf9q";
+
+  const $ = (id) => document.getElementById(id);
+  // Older data files set window.ATTN_DATA; list them first so the newest dataset is the default.
+  const SETS = (window.ATTN_DATASETS || []).slice().sort((a, b) => (a.id === "data_pairs5") - (b.id === "data_pairs5"));
+  if (window.ATTN_DATA) SETS.unshift({ id: "legacy", label: window.ATTN_DATA.model, ...window.ATTN_DATA });
+  if (!SETS.length) {
+    $("app").innerHTML = '<div class="missing">No attention data found. Run <code>python attention/export_viewer.py</code> to create a data file next to this page.</div>';
+    return;
+  }
+  if (RESULTS_URL) { $("resultsLink").href = RESULTS_URL; $("resultsLink").hidden = false; }
+
+  const VIEW_NOTES = {
+    "All layers": "Attention weights, averaged over all heads and layers.",
+    "Rollout (all layers)": "Attention rollout: layers multiplied together (half of each step through the skip connection) to estimate what flows into a token overall. Piles up on early tokens in models like this one.",
+    "Value-weighted (all layers)": "Attention × the size of what the attended token actually passes on through each head (Kobayashi et al. 2020), summed over heads, averaged over layers. Tokens with near-empty value vectors, like the sink, fade out.",
+    "Attention × gradient (all layers)": "Attention edges that make the explanation easier to predict: positive part of attention × −gradient of the answer's surprisal (Chefer et al. 2021), summed over layers.",
+  };
+  const viewNote = (label) => VIEW_NOTES[label] || (label.startsWith("Layers") ? `Attention weights, averaged over all heads of ${label.toLowerCase()}.` : "");
+
+  const state = { set: 0, ex: 0, cond: "qa", band: 0, mode: "row", sink: false, scope: "text", pos: 1, playing: false, timer: null };
+  const cache = new Map();
+  const DS = () => SETS[state.set];
+
+  function decoded(ex, cond, band, set = state.set) {
+    const key = [set, ex, cond, band].join("|");
+    if (cache.has(key)) return cache.get(key);
+    const c = SETS[set].examples[ex][cond];
+    const b = c.bands[band];
+    const bin = atob(b.rows);
+    const bytes = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+    const T = c.tokens.length;
+    const rows = [];
+    for (let i = 0; i < T; i++) {
+      const out = new Float32Array(i + 1);
+      if (i >= 1) {
+        const off = (i - 1) * i / 2, m = b.row_max[i];
+        for (let j = 1; j <= i; j++) out[j] = bytes[off + j - 1] / 255 * m;
+      }
+      rows.push(out);
+    }
+    const nq = c.n_question;
+    const q0 = c.q_start ?? 1, q1 = c.q_end ?? nq;
+    const qshare = rows.map((r, i) => {
+      if (!nq || i < nq) return null;
+      let s = 0; for (let j = q0; j < q1; j++) s += r[j];
+      return s;
+    });
+    const d = { T, tokens: c.tokens, nq, q0, q1, sink: b.sink, rows, qshare, word: c.word || null, occ: c.occlusion || null, occNext: c.occlusion_next || null };
+    cache.set(key, d);
+    return d;
+  }
+
+  // Attention of query i on key j; stored rows leave the sink out and are rescaled to 1.
+  const att = (d, i, j) => {
+    if (j === 0) return state.sink ? d.sink[i] : 0;
+    return state.sink ? d.rows[i][j] * (1 - d.sink[i]) : d.rows[i][j];
+  };
+  const firstKey = () => (state.sink ? 0 : 1);
+  const answerStart = (d) => (d.nq || 1);
+  const shown = (s) => s.replace(/\n/g, "↵\n");
+  const esc = (s) => JSON.stringify(s).slice(1, -1);
+  const normWord = (s) => s.toLowerCase().replace(/’/g, "'").replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}']+$/gu, "");
+
+  // ---- controls
+  function setSeg(id, v) {
+    $(id).querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+  }
+  function fillDatasets() {
+    SETS.forEach((s, k) => { const o = document.createElement("option"); o.value = k; o.textContent = s.label; $("dataset").appendChild(o); });
+  }
+  function fillExamples() {
+    const sel = $("example"); sel.innerHTML = "";
+    const groups = new Map();
+    DS().examples.forEach((e, k) => {
+      if (!groups.has(e.question_id)) groups.set(e.question_id, []);
+      groups.get(e.question_id).push([e, k]);
+    });
+    for (const items of groups.values()) {
+      const e0 = items[0][0];
+      const g = document.createElement("optgroup");
+      const q = e0.question.length > 60 ? e0.question.slice(0, 58) + "…" : e0.question;
+      g.label = `${e0.category} · ${q}`;
+      items.forEach(([e, k]) => {
+        const o = document.createElement("option"); o.value = k;
+        o.textContent = `${e.score_group} answer · score ${e.answer_score}`;
+        g.appendChild(o);
+      });
+      sel.appendChild(g);
+    }
+    sel.value = state.ex;
+    const b = $("band"); b.innerHTML = "";
+    DS().examples[0].qa.bands.forEach((v, k) => { const o = document.createElement("option"); o.value = k; o.textContent = v.label; b.appendChild(o); });
+    if (state.band >= DS().examples[0].qa.bands.length) state.band = 0;
+    b.value = state.band;
+    $("modelName").textContent = `${DS().model} · ${DS().n_layers} layers`;
+  }
+  const partner = () => {
+    const e = DS().examples[state.ex];
+    return DS().examples.findIndex((x, k) => k !== state.ex && x.question_id === e.question_id);
+  };
+  function gotoExample(k, keepOffset = false) {
+    const old = decoded(state.ex, state.cond, state.band);
+    const offset = state.pos - answerStart(old);
+    state.ex = k; $("example").value = k;
+    const d = decoded(state.ex, state.cond, state.band);
+    state.pos = Math.max(1, Math.min(d.T - 1, answerStart(d) + (keepOffset ? offset : 12)));
+    buildText(); render();
+  }
+
+  $("dataset").addEventListener("change", (e) => { stop(); state.set = +e.target.value; state.ex = 0; fillExamples(); gotoExample(0); });
+  $("example").addEventListener("change", (e) => { stop(); gotoExample(+e.target.value); });
+  $("condition").addEventListener("click", (e) => {
+    const v = e.target.closest("button")?.dataset.v; if (!v || v === state.cond) return;
+    const old = decoded(state.ex, state.cond, state.band);
+    const offset = state.pos - answerStart(old);
+    state.cond = v; setSeg("condition", v);
+    const d = decoded(state.ex, state.cond, state.band);
+    state.pos = Math.max(1, Math.min(d.T - 1, answerStart(d) + offset));
+    buildText(); render();
+  });
+  $("mode").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b || b.disabled) return;
+    state.mode = b.dataset.v; setSeg("mode", state.mode); render();
+  });
+  $("sinkmode").addEventListener("click", (e) => {
+    const v = e.target.closest("button")?.dataset.v; if (!v) return;
+    state.sink = v === "in"; setSeg("sinkmode", v); render();
+  });
+  $("scope").addEventListener("click", (e) => {
+    const v = e.target.closest("button")?.dataset.v; if (!v) return;
+    state.scope = v; setSeg("scope", v); renderWords();
+  });
+  $("band").addEventListener("change", (e) => { state.band = +e.target.value; render(); });
+
+  // ---- text
+  let spans = [];
+  function buildText() {
+    const d = decoded(state.ex, state.cond, state.band);
+    const e = DS().examples[state.ex];
+    $("qtitle").textContent = e.question;
+    const meta = $("qmeta"); meta.innerHTML = "";
+    const chip = (t, cls = "") => { const s = document.createElement("span"); s.className = "chip " + cls; s.textContent = t; meta.appendChild(s); };
+    chip(e.category);
+    chip(`${e.score_group} of ${e.n_explanations}`, e.score_group === "highest" ? "hi" : e.score_group === "lowest" ? "lo" : "");
+    chip(`score ${e.answer_score}`); chip(`${d.T} tokens`); chip(e.answer_id);
+    const p = partner();
+    if (p >= 0) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "ghost";
+      b.textContent = `Switch to the ${DS().examples[p].score_group} answer`;
+      b.addEventListener("click", () => { stop(); gotoExample(p, true); });
+      meta.appendChild(b);
+    }
+    const box = $("text"); box.innerHTML = "";
+    spans = d.tokens.map((t, i) => {
+      const s = document.createElement("span");
+      s.className = "tok" + (i >= d.q0 && i < d.q1 ? " q" : "") + (i === 0 ? " sink" : "");
+      s.textContent = shown(t);
+      s.dataset.i = i;
+      box.appendChild(s);
+      return s;
+    });
+    $("slider").max = d.T - 1;
+    $("timeline").hidden = !d.nq;
+    const occBtn = $("mode").querySelector('[data-v="occ"]');
+    occBtn.disabled = !d.occ;
+    occBtn.title = d.occ ? "" : "No occlusion results for this explanation yet";
+    if (!d.occ && state.mode === "occ") { state.mode = "row"; setSeg("mode", "row"); }
+    sizeChart();
+  }
+  $("text").addEventListener("click", (e) => {
+    const s = e.target.closest(".tok"); if (!s) return;
+    stop(); state.pos = Math.max(1, +s.dataset.i); render();
+  });
+
+  const heat = (alpha, v = "--heat") => (alpha <= 0.004 ? "" : `color-mix(in srgb, var(${v}) ${Math.round(Math.min(1, alpha) * 100)}%, transparent)`);
+
+  function receivedSoFar(d, upto) {
+    // mean over queries k in (j, upto] of att(k, j) * (keys visible to k)  -> 1.0 = even spread
+    const f = firstKey();
+    const sum = new Float32Array(d.T), cnt = new Uint16Array(d.T);
+    for (let k = f + 1; k <= upto; k++) {
+      const visible = k + 1 - f;
+      for (let j = f; j < k; j++) { sum[j] += att(d, k, j) * visible; cnt[j]++; }
+    }
+    return { value: Array.from(sum, (s, j) => (cnt[j] ? s / cnt[j] : null)), count: cnt };
+  }
+  const MIN_RECEIVERS = 3; // fewer later tokens than this: too noisy to shade
+
+  function render() {
+    const d = decoded(state.ex, state.cond, state.band);
+    const i = state.pos;
+    const f = firstKey();
+    const r = new Float32Array(i + 1);
+    let rmax = 0;
+    for (let j = f; j <= i; j++) { r[j] = att(d, i, j); rmax = Math.max(rmax, r[j]); }
+    const recv = state.mode === "recv" ? receivedSoFar(d, i) : null;
+    const sinkNote = `attention sink: ${(d.sink[i] * 100).toFixed(0)}% of the current token's attention`;
+
+    spans.forEach((s, j) => {
+      s.classList.toggle("cur", j === i && state.mode !== "occ");
+      s.classList.toggle("future", j > i && state.mode !== "occ");
+      let bg = "", title = j === 0 ? sinkNote : "";
+      if (state.mode === "occ") {
+        const v = d.occ?.[j];
+        if (v != null) {
+          bg = v >= 0 ? heat(v / 20 * 0.85) : heat(-v / 20 * 0.85, "--neg");
+          const nx = d.occNext?.[j];
+          title = `removing this word: ${v >= 0 ? "+" : ""}${v.toFixed(1)} bits over the next 20 tokens` +
+            (nx != null ? ` (${nx.toFixed(1)} of them on the very next token)` : "");
+        }
+      } else if (j >= f && j < i) {
+        if (recv) {
+          const v = recv.value[j], n = recv.count[j];
+          if (v != null && n >= MIN_RECEIVERS) {
+            const l = Math.log2(Math.max(v, 1e-6)) / 3; // ±3 = 8× more / less than an even spread
+            bg = l >= 0 ? heat(l * 0.85) : heat(-l * 0.6, "--neg");
+          }
+          if (v != null) title = `received ${v.toFixed(2)}× an even spread from ${n} later token${n === 1 ? "" : "s"} so far`;
+        } else {
+          bg = heat(Math.pow(r[j] / (rmax || 1), 0.8) * 0.85);
+          title = `${(r[j] * 100).toFixed(1)}% of this token's attention`;
+        }
+      }
+      s.style.backgroundColor = bg;
+      s.title = title;
+    });
+    if (state.mode !== "occ") spans[i]?.scrollIntoView({ block: "nearest" });
+
+    $("slider").value = i;
+    const inAnswer = i >= answerStart(d);
+    $("pos").textContent = `token ${i} / ${d.T - 1}` + (d.nq ? (inAnswer ? " · answer" : " · question") : "");
+    $("curtok").textContent = esc(d.tokens[i]);
+    const label = DS().examples[state.ex][state.cond].bands[state.band].label;
+    $("viewnote").textContent = state.mode === "occ" ? "Occlusion: each word (with any attached punctuation) removed in turn; the model's surprisal on the next 20 tokens is compared with the original text." : viewNote(label);
+
+    const stats = [["Position", i], ["On first token (sink)", (d.sink[i] * 100).toFixed(1) + "%"]];
+    if (d.nq && inAnswer) {
+      const scale = state.sink ? 1 - d.sink[i] : 1;
+      const of = state.sink ? "" : " (excl. sink)";
+      let own = 0; for (let j = d.nq; j <= i; j++) own += d.rows[i][j];
+      stats.push(["On the question" + of, (d.qshare[i] * scale * 100).toFixed(1) + "%"]);
+      stats.push(["On the answer so far" + of, (own * scale * 100).toFixed(1) + "%"]);
+    }
+    stats.push(["Even spread would be", (100 / (i + 1 - f)).toFixed(1) + "% each"]);
+    if (d.occ && d.occ[i] != null) {
+      stats.push(["Occlusion effect of its word", (d.occ[i] >= 0 ? "+" : "") + d.occ[i].toFixed(1) + " bits"]);
+      if (d.occNext?.[i] != null) stats.push(["… of which on the next token", d.occNext[i].toFixed(1) + " bits"]);
+    }
+    $("stats").innerHTML = stats.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+
+    $("topnote").textContent = state.sink
+      ? "Share of all of this token's attention, sink included, in the current measure."
+      : "Share of this token's attention after leaving out the sink, in the current measure.";
+    const order = [];
+    for (let j = f; j <= i; j++) order.push(j);
+    order.sort((a, b) => r[b] - r[a]);
+    $("top").innerHTML = "";
+    order.slice(0, 8).forEach((j) => {
+      $("top").appendChild(barRow(`${esc(d.tokens[j])}  #${j}` + (j === i ? " (itself)" : ""), r[j] / (r[order[0]] || 1), (r[j] * 100).toFixed(1) + "%"));
+    });
+
+    const lg = $("legend");
+    if (state.mode === "occ") lg.innerHTML = '<span class="key"><span class="ramp div"></span>removing the word makes the next 20 tokens easier ← → harder (±20 bits)</span>';
+    else if (state.mode === "recv") lg.innerHTML = '<span class="key"><span class="ramp div"></span>received so far: ⅛× ← even spread → 8× (tokens seen by fewer than 3 later tokens stay unshaded)</span>';
+    else lg.innerHTML = '<span class="key"><span class="ramp"></span>share of the dark token\'s attention (relative to its strongest target)</span>';
+    if (d.nq) lg.insertAdjacentHTML("beforeend", '<span class="key"><span class="swatch" style="box-shadow: inset 0 -2px 0 var(--question); background: transparent; border: 1px solid var(--rule)"></span>question tokens</span>');
+    drawChart();
+    renderWords();
+  }
+
+  function barRow(label, frac, value, n) {
+    const li = document.createElement("li"); if (n != null) li.className = "wide";
+    const lab = document.createElement("span"); lab.className = "lab";
+    const bar = document.createElement("i"); bar.className = "bar"; bar.style.width = `${Math.max(0, Math.min(1, frac)) * 100}%`;
+    const t = document.createElement("span"); t.textContent = label;
+    lab.append(bar, t);
+    const val = document.createElement("span"); val.className = "val"; val.textContent = value;
+    li.append(lab, val);
+    if (n != null) { const c = document.createElement("span"); c.className = "n"; c.textContent = `×${n}`; c.title = `${n} occurrences`; li.append(c); }
+    return li;
+  }
+
+  // ---- overall statistics: words that receive the most (current measure), or occlusion
+  const wordCache = new Map();
+  function wordScores(ex) {
+    const key = [state.set, ex, state.cond, state.band, state.sink, state.mode === "occ"].join("|");
+    if (wordCache.has(key)) return wordCache.get(key);
+    const d = decoded(ex, state.cond, state.band);
+    const out = new Map(); // word index -> {text, sum, n}
+    if (!d.word) { wordCache.set(key, out); return out; }
+    const val = state.mode === "occ" ? d.occ : receivedSoFar(d, d.T - 1).value;
+    if (!val) { wordCache.set(key, out); return out; }
+    d.word.forEach((w, j) => {
+      if (w < 0 || val[j] == null) return;
+      const o = out.get(w) || { text: "", sum: 0, n: 0 };
+      o.text += d.tokens[j]; o.sum += val[j]; o.n++;
+      out.set(w, o);
+    });
+    for (const o of out.values()) o.value = state.mode === "occ" ? o.sum / o.n : o.sum / o.n;
+    wordCache.set(key, out);
+    return out;
+  }
+  function renderWords() {
+    const occ = state.mode === "occ";
+    const exs = state.scope === "text" ? [state.ex] : DS().examples.map((_, k) => k).filter((k) => !occ || DS().examples[k][state.cond].occlusion);
+    const agg = new Map();
+    for (const ex of exs) {
+      for (const o of wordScores(ex).values()) {
+        const w = normWord(o.text); if (!w) continue;
+        const a = agg.get(w) || { sum: 0, n: 0 };
+        a.sum += occ ? o.value : Math.log2(Math.max(o.value, 1e-6)); a.n++;
+        agg.set(w, a);
+      }
+    }
+    const minN = state.scope === "all" ? 2 : 1;
+    const rows = [...agg].filter(([, a]) => a.n >= minN).map(([w, a]) => [w, occ ? a.sum / a.n : 2 ** (a.sum / a.n), a.n]);
+    rows.sort((a, b) => b[1] - a[1]);
+    const top = rows.slice(0, 12);
+    const list = $("words"); list.innerHTML = "";
+    const label = DS().examples[state.ex][state.cond].bands[state.band].label;
+    $("wordsTitle").textContent = occ ? "Words that matter most" : "Most looked-at words";
+    if (!top.length) { list.innerHTML = '<li class="note">Nothing to show for this setting.</li>'; }
+    const maxV = top.length ? top[0][1] : 1;
+    top.forEach(([w, v, n]) => list.appendChild(barRow(w, v / (maxV || 1), occ ? (v >= 0 ? "+" : "") + v.toFixed(2) : v.toFixed(2) + "×", state.scope === "all" ? n : null)));
+    $("wordsnote").textContent = occ
+      ? `Mean occlusion effect in bits${state.scope === "all" ? " over all texts with occlusion results (words seen at least twice)" : ""}.`
+      : `Attention received from all later tokens, relative to an even spread (geometric mean${state.scope === "all" ? " over all texts, words seen at least twice" : ""}). Measure: ${label}${state.sink ? ", sink included" : ""}.`;
+  }
+
+  // ---- timeline chart
+  const canvas = $("chart");
+  function sizeChart() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function drawChart() {
+    const d = decoded(state.ex, state.cond, state.band);
+    const ctx = canvas.getContext("2d");
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const css = getComputedStyle(document.documentElement);
+    const col = (v) => css.getPropertyValue(v).trim();
+    const padL = 30, padR = 6, padT = 6, padB = 16;
+    const x = (i) => padL + (i / Math.max(1, d.T - 1)) * (w - padL - padR);
+    const y = (v) => padT + (1 - v) * (h - padT - padB);
+    ctx.clearRect(0, 0, w, h);
+    if (!d.nq) return;
+    ctx.font = `11px ${col("--mono")}`; ctx.fillStyle = col("--muted"); ctx.strokeStyle = col("--rule"); ctx.lineWidth = 1;
+    [0, 0.5, 1].forEach((v) => {
+      ctx.beginPath(); ctx.moveTo(padL, y(v) + 0.5); ctx.lineTo(w - padR, y(v) + 0.5); ctx.stroke();
+      ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(`${v * 100}%`, padL - 4, y(v));
+    });
+    ctx.fillStyle = col("--question"); ctx.fillRect(padL, padT, x(d.nq) - padL, h - padT - padB);
+    ctx.fillStyle = col("--muted"); ctx.textAlign = "left"; ctx.textBaseline = "top";
+    ctx.fillText("question", padL + 4, h - padB + 3);
+    ctx.fillText("answer", x(d.nq) + 4, h - padB + 3);
+    ctx.strokeStyle = col("--heat"); ctx.lineWidth = 1.5; ctx.beginPath(); let on = false;
+    d.qshare.forEach((v, i) => {
+      if (v == null) { on = false; return; }
+      const vv = v * (state.sink ? 1 - d.sink[i] : 1);
+      on ? ctx.lineTo(x(i), y(vv)) : ctx.moveTo(x(i), y(vv)); on = true;
+    });
+    ctx.stroke();
+    ctx.strokeStyle = col("--ink"); ctx.lineWidth = 1; ctx.beginPath();
+    ctx.moveTo(x(state.pos) + 0.5, padT); ctx.lineTo(x(state.pos) + 0.5, h - padB); ctx.stroke();
+  }
+  function seekFromChart(ev) {
+    const d = decoded(state.ex, state.cond, state.band);
+    const rect = canvas.getBoundingClientRect();
+    const f = (ev.clientX - rect.left - 30) / (rect.width - 36);
+    stop(); state.pos = Math.max(1, Math.min(d.T - 1, Math.round(f * (d.T - 1)))); render();
+  }
+  canvas.addEventListener("pointerdown", (ev) => { seekFromChart(ev); canvas.setPointerCapture(ev.pointerId); });
+  canvas.addEventListener("pointermove", (ev) => { if (ev.buttons) seekFromChart(ev); });
+  new ResizeObserver(() => { sizeChart(); drawChart(); }).observe(canvas);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", drawChart);
+  new MutationObserver(drawChart).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+  // ---- playback
+  function step(delta) {
+    const d = decoded(state.ex, state.cond, state.band);
+    state.pos = Math.max(1, Math.min(d.T - 1, state.pos + delta)); render();
+  }
+  function stop() { state.playing = false; clearInterval(state.timer); $("play").textContent = "Play"; }
+  function play() {
+    const d = decoded(state.ex, state.cond, state.band);
+    if (state.pos >= d.T - 1) state.pos = 1;
+    state.playing = true; $("play").textContent = "Pause";
+    state.timer = setInterval(() => {
+      if (state.pos >= decoded(state.ex, state.cond, state.band).T - 1) return stop();
+      step(1);
+    }, 180);
+  }
+  $("play").addEventListener("click", () => (state.playing ? stop() : play()));
+  $("prev").addEventListener("click", () => { stop(); step(-1); });
+  $("next").addEventListener("click", () => { stop(); step(1); });
+  $("slider").addEventListener("input", (e) => { stop(); state.pos = Math.max(1, +e.target.value); render(); });
+  document.addEventListener("keydown", (e) => {
+    // Arrow keys also work while a button has focus (clicking one focuses it);
+    // only form fields keep them, and a focused button keeps space for itself.
+    if (e.target.closest("select, input")) return;
+    if (e.key === " " && e.target.closest("button")) return;
+    if (e.key === "ArrowRight") { stop(); step(1); e.preventDefault(); }
+    else if (e.key === "ArrowLeft") { stop(); step(-1); e.preventDefault(); }
+    else if (e.key === " ") { state.playing ? stop() : play(); e.preventDefault(); }
+  });
+
+  // start on the newest dataset, a dozen tokens into its first answer, paused
+  state.set = SETS.length - 1;
+  fillDatasets(); $("dataset").value = state.set;
+  fillExamples();
+  const d0 = decoded(0, "qa", 0);
+  state.pos = Math.min(d0.T - 1, answerStart(d0) + 12);
+  buildText(); render();
+})();
+</script>

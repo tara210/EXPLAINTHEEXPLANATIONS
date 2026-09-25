@@ -4,3 +4,9 @@ __pycache__/
 # Regenerate with: python DATASET/prepare_eli5c.py
 DATASET/raw/
 DATASET/processed/
+
+# Attention results (regenerate with attention/extract_attention.py)
+attention/output/
+
+# Run logs
+attention/logs/
